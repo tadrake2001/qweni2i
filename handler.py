@@ -64,7 +64,7 @@ def queue_prompt(prompt):
     logger.info(f"Queueing prompt to: {url}")
     p = {"prompt": prompt, "client_id": client_id}
     data = json.dumps(p).encode('utf-8')
-    req = urllib.request.Request(url, data=data)
+    req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
     return json.loads(urllib.request.urlopen(req).read())
 
 def get_image(filename, subfolder, folder_type):
@@ -136,15 +136,26 @@ def handler(job):
     # ------------------------------
     # Image input handling
     # ------------------------------
+    # ComfyUI loads images from its input directory
+    COMFYUI_INPUT_DIR = "/ComfyUI/input"
+    os.makedirs(COMFYUI_INPUT_DIR, exist_ok=True)
+
     image_path = None
     if "image_base64" in job_input:
-        task_id = f"task_{uuid.uuid4()}"
-        image_path = save_data_if_base64(job_input["image_base64"], task_id, "input_image.jpg")
+        task_id = f"task_{uuid.uuid4().hex}"
+        filename = f"{task_id}_input.jpg"
+        abs_path = os.path.join(COMFYUI_INPUT_DIR, filename)
+        image_path = save_data_if_base64(job_input["image_base64"], COMFYUI_INPUT_DIR, filename)
+        # Use only the filename (relative to ComfyUI input dir)
+        image_path = filename
     elif "image_path" in job_input:
         image_path = job_input["image_path"]
     elif "image_url" in job_input:
-        task_id = f"task_{uuid.uuid4()}"
-        image_path = download_file_from_url(job_input["image_url"], os.path.join(task_id, "input_image.jpg"))
+        task_id = f"task_{uuid.uuid4().hex}"
+        filename = f"{task_id}_input.jpg"
+        abs_path = os.path.join(COMFYUI_INPUT_DIR, filename)
+        download_file_from_url(job_input["image_url"], abs_path)
+        image_path = filename
     else:
         return {"error": "Image required (image_base64 / image_path / image_url)"}
 
