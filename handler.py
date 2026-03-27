@@ -152,10 +152,14 @@ def handler(job):
         image_path = job_input["image_path"]
     elif "image_url" in job_input:
         task_id = f"task_{uuid.uuid4().hex}"
-        filename = f"{task_id}_input.jpg"
+        # Preserve original extension from URL
+        url_path = job_input["image_url"].split("?")[0]  # strip query params
+        ext = os.path.splitext(url_path)[-1].lower() or ".jpg"
+        filename = f"{task_id}_input{ext}"
         abs_path = os.path.join(COMFYUI_INPUT_DIR, filename)
         download_file_from_url(job_input["image_url"], abs_path)
         image_path = filename
+        logger.info(f"Downloaded image to: {abs_path}, using filename: {image_path}")
     else:
         return {"error": "Image required (image_base64 / image_path / image_url)"}
 
@@ -178,6 +182,10 @@ def handler(job):
         prompt[_NODE_SEED]["inputs"]["steps"] = job_input["steps"]
     if "cfg" in job_input:
         prompt[_NODE_SEED]["inputs"]["cfg"] = job_input["cfg"]
+
+    # Debug: log final prompt before sending
+    logger.info(f"Final prompt node 437 (LoadImage): {prompt[_NODE_LOAD_IMAGE]['inputs']}")
+    logger.info(f"Final prompt node 7 (TextGenerate): {prompt[_NODE_TEXT_GENERATE]['inputs'].get('prompt', '')[:100]}")
 
     # ------------------------------
     # Connect to ComfyUI
@@ -230,23 +238,34 @@ def handler(job):
     return {"error": "No output images found"}
 
 def download_file_from_url(url, output_path):
-    """URL에서 파일을 다운로드하는 함수"""
+    """URL에서 파일을 다운로드 - urllib 우선, wget 폴백"""
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    logger.info(f"Downloading: {url} -> {output_path}")
+    # Try urllib first (no external dependency)
     try:
-        result = subprocess.run([
-            'wget', '-O', output_path, '--no-verbose', url
-        ], capture_output=True, text=True, timeout=300)
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=60) as response:
+            with open(output_path, 'wb') as f:
+                f.write(response.read())
+        logger.info(f"✅ Downloaded via urllib: {url} -> {output_path}")
+        return output_path
+    except Exception as e:
+        logger.warning(f"urllib download failed, trying wget: {e}")
+    # Fallback: wget
+    try:
+        result = subprocess.run(
+            ['wget', '-O', output_path, '--no-verbose', '--timeout=60', url],
+            capture_output=True, text=True, timeout=120
+        )
         if result.returncode == 0:
-            logger.info(f"✅ Downloaded: {url} -> {output_path}")
+            logger.info(f"✅ Downloaded via wget: {url} -> {output_path}")
             return output_path
         else:
             logger.error(f"❌ wget failed: {result.stderr}")
             raise Exception(f"Download failed: {result.stderr}")
     except subprocess.TimeoutExpired:
-        logger.error("❌ Download timeout")
         raise Exception("Download timeout")
     except Exception as e:
-        logger.error(f"❌ Download error: {e}")
         raise Exception(f"Download error: {e}")
 
 runpod.serverless.start({"handler": handler})
